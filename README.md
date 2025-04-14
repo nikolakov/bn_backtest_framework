@@ -68,6 +68,13 @@ pip install -r requirements.txt
 jupyter notebook examples/buy_on_date.ipynb
 ```
 
+A conda environment yaml file is also available. Optional dependencies are included. To create and activate the conda environment, run:
+
+```bash
+conda env create -f environment.yaml
+conda activate bn_backtest
+```
+
 ## Example Usage
 
 ```python

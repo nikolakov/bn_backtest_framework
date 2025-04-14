@@ -1,0 +1,12 @@
+name: bn_backtest
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pandas
+  - matplotlib
+  - notebook
+  - pip
+  - pip:
+      - python-binance
