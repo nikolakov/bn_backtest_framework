@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import List, Any
+from typing import List
 import pandas as pd
 from trade_action import TradeAction
 from position import Position
+
 
 class Strategy(ABC):
     """
@@ -14,7 +15,9 @@ class Strategy(ABC):
         pass
 
     @abstractmethod
-    def on_candle(self, data: pd.DataFrame, positions_list: List[Position]) -> List[TradeAction]:
+    def on_candle(
+        self, data: pd.DataFrame, positions_list: List[Position]
+    ) -> List[TradeAction]:
         """
         Callback function to be called at each step of the backtest.
         """

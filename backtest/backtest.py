@@ -5,6 +5,7 @@ from typing import List, Type
 import pandas as pd
 import numpy as np
 
+
 class Backtest:
     def __init__(self, data: pd.DataFrame, strategy: Type[Strategy]):
         """
@@ -23,7 +24,7 @@ class Backtest:
         # All remaining positions on the last interval are closed with the open price.
         for i in range(len(self.data) - 1):
             # Get the data until that interval, included (historical data)
-            historical_data = self.data.iloc[:i + 1]
+            historical_data = self.data.iloc[: i + 1]
             # Get the next interval data (next_data)
             next_data = self.data.iloc[i + 1]
 
@@ -33,16 +34,11 @@ class Backtest:
             # Update positions based on trade actions
             self.positions = self._update_positions(trade_actions, next_data)
 
-        # Close all remaining positions with the open price of the last interval
-        last_interval_data = self.data.iloc[-1]
-        for pos in self.positions:
-            if pos.exit_time is None:
-                pos.exit_time = last_interval_data.name
-                # Assuming the exit price is the open price of the last interval
-
         self._calculate_pnl()
 
-    def _update_positions(self, trade_actions: List[TradeAction], next_interval_data: pd.Series):
+    def _update_positions(
+        self, trade_actions: List[TradeAction], next_interval_data: pd.Series
+    ):
         """
         Update the open positions based on the trade actions.
 
@@ -53,28 +49,32 @@ class Backtest:
 
         for action in trade_actions:
             # Validations
-            if action.action == 'enter' and (action.quantity is None) == (action.value is None):
-                raise ValueError("Provide exactly one of 'quantity' or 'value' in TradeAction")
-            if action.action not in ['enter', 'exit']:
+            if action.action == "enter" and (action.quantity is None) == (
+                action.value is None
+            ):
+                raise ValueError(
+                    "Provide exactly one of 'quantity' or 'value' in TradeAction"
+                )
+            if action.action not in ["enter", "exit"]:
                 raise ValueError("Invalid action. Must be 'enter' or 'exit'.")
-            if action.action == 'exit' and action.position_id is None:
+            if action.action == "exit" and action.position_id is None:
                 raise ValueError("Position ID must be provided for exit action.")
-            
+
             # Convert value to quantity if needed
-            if action.action == 'enter' and action.value is not None:
+            if action.action == "enter" and action.value is not None:
                 # Calculate quantity from value
-                action.quantity = action.value / next_interval_data['Open']
-            
-            if action.action == 'enter':
+                action.quantity = action.value / next_interval_data["Open"]
+
+            if action.action == "enter":
                 # Open a new position
                 new_position = Position(
                     id=f"{len(updated_positions) + 1}",
                     entry_time=next_interval_data.name,
                     exit_time=None,
-                    quantity=action.quantity
+                    quantity=action.quantity,
                 )
                 updated_positions.append(new_position)
-            elif action.action == 'exit':
+            elif action.action == "exit":
                 # Close an existing position
                 for pos in updated_positions:
                     if pos.id == action.position_id:
@@ -94,21 +94,29 @@ class Backtest:
         # Add position exposure for each position
         for position in self.positions:
             # Get the initial value of the position (value at entry time)
-            entry_value = pnl_df.loc[position.entry_time, 'Open'] * position.quantity
-            exit_value = pnl_df.loc[position.exit_time, 'Open'] * position.quantity
+            entry_value = pnl_df.loc[position.entry_time, "Open"] * position.quantity
+
+            # Get the exit time of the position (last interval if not closed)
+            exit_idx = (
+                position.exit_time
+                if position.exit_time is not None
+                else pnl_df.index[-1]
+            )
 
             qty_series = pd.Series(0.0, index=pnl_df.index)
-            qty_series.loc[position.entry_time : position.exit_time] = position.quantity
+            qty_series.loc[position.entry_time : exit_idx] = position.quantity
 
             # Calculate position value for each interval
-            value_series = qty_series * pnl_df['Close']
+            value_series = qty_series * pnl_df["Close"]
 
             # Calculate positon pnl for each interval
             pnl_series = pd.Series(0.0, index=pnl_df.index)
-            pnl_series.loc[position.entry_time : position.exit_time] = value_series - entry_value
+            pnl_series.loc[position.entry_time : exit_idx] = value_series - entry_value
 
-            # Add the realized pnl after the position is closed
-            pnl_series.loc[position.exit_time:] = exit_value - entry_value
+            # Add the realized pnl after exiting from the position
+            if position.exit_time is not None:
+                exit_value = pnl_df.loc[position.exit_time, "Open"] * position.quantity
+                pnl_series.loc[position.exit_time :] = exit_value - entry_value
 
             # Add the position pnl to the dictionary
             pnl_cols[f"pos-{position.id}-pnl"] = pnl_series
@@ -118,7 +126,7 @@ class Backtest:
         # Add the position pnl columns to the dataframe
         pnl_df = pd.concat([pnl_df, pd.DataFrame(pnl_cols)], axis=1)
         # Add the total pnl to the dataframe
-        pnl_df['total_pnl'] = total_pnl
+        pnl_df["total_pnl"] = total_pnl
 
         self.pnl_df = pnl_df
 
@@ -129,25 +137,29 @@ class Backtest:
         stats = {}
 
         # Calculate total return
-        stats['total_return'] = self.pnl_df['total_pnl'].iloc[-1]
+        stats["total_return"] = self.pnl_df["total_pnl"].iloc[-1]
 
         # Calculate max drawdown
-        drawdown_series = self.pnl_df['total_pnl'] - self.pnl_df['total_pnl'].cummax()
-        stats['max_drawdown'] = drawdown_series.min()
+        drawdown_series = self.pnl_df["total_pnl"] - self.pnl_df["total_pnl"].cummax()
+        stats["max_drawdown"] = drawdown_series.min()
 
         # Calculate Sharpe ratio
-        returns = self.pnl_df['total_pnl'].diff().fillna(0)
+        returns = self.pnl_df["total_pnl"].diff().fillna(0)
         mean_return = returns.mean()
         std_return = returns.std()
-        stats['sharpe_ratio'] = mean_return / std_return if std_return != 0 else np.nan
+        stats["sharpe_ratio"] = mean_return / std_return if std_return != 0 else np.nan
 
         # Calculate win rate, average win, and average loss
         wins = []
         losses = []
 
         for pos in self.positions:
-            entry_price = self.pnl_df.loc[pos.entry_time, 'Open']
-            exit_price = self.pnl_df.loc[pos.exit_time, 'Open']
+            entry_price = self.pnl_df.loc[pos.entry_time, "Open"]
+            exit_price = (
+                self.pnl_df.loc[pos.exit_time, "Open"]
+                if pos.exit_time is not None
+                else self.pnl_df["Close"].iloc[-1]
+            )
             pnl = (exit_price - entry_price) * pos.quantity
 
             if pnl > 0:
@@ -158,10 +170,10 @@ class Backtest:
         total_trades = len(self.positions)
         win_trades = len(wins)
 
-        stats['num_trades'] = total_trades
-        stats['win_rate'] = win_trades / total_trades if total_trades else np.nan
-        stats['avg_win'] = np.mean(wins) if wins else 0.0
-        stats['avg_loss'] = np.mean(losses) if losses else 0.0
+        stats["num_trades"] = total_trades
+        stats["win_rate"] = win_trades / total_trades if total_trades else np.nan
+        stats["avg_win"] = np.mean(wins) if wins else 0.0
+        stats["avg_loss"] = np.mean(losses) if losses else 0.0
 
         print("Backtest Statistics:")
         for key, value in stats.items():
