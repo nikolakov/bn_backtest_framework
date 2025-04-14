@@ -1,0 +1,8 @@
+# Core dependencies
+pandas
+numpy
+
+# Uncomment the following lines to install optional dependencies for running example notebooks
+# matplotlib
+# notebook
+# python-binance

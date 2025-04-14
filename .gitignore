@@ -1,0 +1,37 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# Mac OS
+.DS_Store
+
+# Python packaging artifacts
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+
+# Data files for example notebooks. Should be generated on demand instead of bloating the repo.
+examples/**/*.csv
+
+# Misc
+*.bak
+*.swp
