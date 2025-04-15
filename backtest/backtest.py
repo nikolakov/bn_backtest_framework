@@ -121,7 +121,10 @@ class Backtest:
         """
         pnl_df = self.data.copy()
         value_cols = {}
-        cash_balance = pd.Series(self.starting_equity, index=pnl_df.index)
+        cash_balance = pd.Series(
+            self.starting_equity if self.starting_equity != float("inf") else 0.0,
+            index=pnl_df.index,
+        )
 
         # Add position exposure for each position
         for position in self.positions:
@@ -158,7 +161,9 @@ class Backtest:
         # Calculate the equity
         pnl_df["equity"] = pnl_df["cash_balance"] + pos_value_df.sum(axis=1)
         # Calculate the pnl
-        pnl_df["total_pnl"] = pnl_df["equity"] - self.starting_equity
+        pnl_df["total_pnl"] = pnl_df["equity"] - (
+            self.starting_equity if self.starting_equity != float("inf") else 0.0
+        )
         # Add the position values to the DataFrame
         pnl_df = pd.concat([pnl_df, pos_value_df], axis=1)
 
