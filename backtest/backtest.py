@@ -40,7 +40,7 @@ class Backtest:
             buying_power = self._calculate_buying_power(next_data)
             if buying_power < 0:
                 raise ValueError(
-                    f"Buying power is negative: {buying_power}. The strategy was liquidated at open on {next_data.index}."
+                    f"Buying power is negative: {buying_power}. The strategy was liquidated at open on {next_data.name}."
                 )
 
             # Call the strategy's on_candle method
@@ -101,7 +101,7 @@ class Backtest:
                 entry_cost = action.quantity * next_interval_data["Open"]
                 if self._calculate_buying_power(next_interval_data) < entry_cost:
                     raise ValueError(
-                        f"Insufficient cash to enter position {action} on {next_interval_data.index}."
+                        f"Insufficient buying power to enter position {action} on {next_interval_data.name}. Buying power: {self._calculate_buying_power(next_interval_data)}, entry cost: {entry_cost}."
                     )
 
                 new_position = Position(
