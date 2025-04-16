@@ -5,4 +5,4 @@ from .position import Position
 from .positions_book import PositionsBook
 
 __all__ = ["Backtest", "Strategy", "Position", "Order", "PositionsBook"]
-__version__ = "0.2.0"
+__version__ = "0.3.0"
