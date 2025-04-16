@@ -1,6 +1,7 @@
 from strategy import Strategy
 from position import Position
-from trade_action import TradeAction
+from order import Order
+from positions_book import PositionsBook
 from typing import List, Type
 import pandas as pd
 import numpy as np
@@ -43,17 +44,17 @@ class Backtest:
                     f"Buying power is negative: {buying_power}. The strategy was liquidated at open on {next_data.name}."
                 )
 
+            positions_books = PositionsBook(self.positions, historical_data.iloc[-1])
+
             # Call the strategy's on_candle method
-            trade_actions = self.strategy.on_candle(historical_data, self.positions)
+            orders = self.strategy.on_candle(historical_data, positions_books)
 
             # Update positions based on trade actions
-            self._update_positions(trade_actions, next_data)
+            self._update_positions(orders, next_data)
 
         self._calculate_pnl()
 
-    def _update_positions(
-        self, trade_actions: List[TradeAction], next_interval_data: pd.Series
-    ):
+    def _update_positions(self, orders: List[Order], next_interval_data: pd.Series):
         """
         Update the open positions based on the trade actions.
 
@@ -64,51 +65,49 @@ class Backtest:
         # process exit actions first to
         # 1. avoid chance of closing a position that was just opened
         # 2. free up buying power for new positions
-        trade_actions = sorted(
-            trade_actions, key=lambda action: 0 if action.action == "exit" else 1
-        )
+        orders = sorted(orders, key=lambda action: 0 if action.action == "exit" else 1)
 
-        for action in trade_actions:
+        for order in orders:
             # Validations
-            if action.action == "enter" and (action.quantity is None) == (
-                action.value is None
+            if order.action == "enter" and (order.quantity is None) == (
+                order.value is None
             ):
                 raise ValueError(
                     "Provide exactly one of 'quantity' or 'value' in TradeAction"
                 )
-            if action.action not in ["enter", "exit"]:
+            if order.action not in ["enter", "exit"]:
                 raise ValueError("Invalid action. Must be 'enter' or 'exit'.")
-            if action.action == "exit" and action.position_id is None:
+            if order.action == "exit" and order.position_id is None:
                 raise ValueError("Position ID must be provided for exit action.")
 
-            if action.action == "exit":
+            if order.action == "exit":
                 # Close an existing position
                 for pos in self._get_open_positions():
-                    if pos.id == action.position_id:
+                    if pos.id == order.position_id:
                         pos.exit_time = next_interval_data.name
 
                         # Update available cash
                         self.cash_balance += pos.quantity * next_interval_data["Open"]
 
                         break
-            elif action.action == "enter":
+            elif order.action == "enter":
                 # Convert value to quantity if needed
-                if action.value is not None:
+                if order.value is not None:
                     # Calculate quantity from value
-                    action.quantity = action.value / next_interval_data["Open"]
+                    order.quantity = order.value / next_interval_data["Open"]
 
                 # Check if there is enough cash to enter the position
-                entry_cost = action.quantity * next_interval_data["Open"]
+                entry_cost = order.quantity * next_interval_data["Open"]
                 if self._calculate_buying_power(next_interval_data) < entry_cost:
                     raise ValueError(
-                        f"Insufficient buying power to enter position {action} on {next_interval_data.name}. Buying power: {self._calculate_buying_power(next_interval_data)}, entry cost: {entry_cost}."
+                        f"Insufficient buying power to execute order {order} on {next_interval_data.name}. Buying power: {self._calculate_buying_power(next_interval_data)}, entry cost: {entry_cost}."
                     )
 
                 new_position = Position(
                     id=f"{len(self.positions) + 1}",
                     entry_time=next_interval_data.name,
                     exit_time=None,
-                    quantity=action.quantity,
+                    quantity=order.quantity,
                 )
                 self.positions.append(new_position)
 
