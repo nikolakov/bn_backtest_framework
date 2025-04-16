@@ -22,14 +22,14 @@ class PositionsBook:
         """
         Returns a list of open positions.
         """
-        return [pos for pos in self._positions if pos.exit_time is None]
+        return [pos for pos in self._positions if pos.is_open]
 
     @property
     def closed_positions(self) -> List[Position]:
         """
         Returns a list of closed positions.
         """
-        return [pos for pos in self._positions if pos.exit_time is not None]
+        return [pos for pos in self._positions if pos.is_closed]
 
     @property
     def quantity(self) -> float:

@@ -49,23 +49,23 @@ class Backtest:
             # Call the strategy's on_candle method
             orders = self.strategy.on_candle(historical_data, positions_books)
 
-            # Update positions based on trade actions
+            # Update positions based on orders
             self._update_positions(orders, next_data)
 
         self._calculate_pnl()
 
     def _update_positions(self, orders: List[Order], next_interval_data: pd.Series):
         """
-        Update the open positions based on the trade actions.
+        Update the open positions based on the orders created by the strategy.
 
-        :param tradeActions: List of trade actions to be executed.
+        :param orders: List of orders to be executed.
         :return: Updated list of open positions.
         """
 
         # process exit actions first to
         # 1. avoid chance of closing a position that was just opened
         # 2. free up buying power for new positions
-        orders = sorted(orders, key=lambda action: 0 if action.action == "exit" else 1)
+        orders = sorted(orders, key=lambda order: 0 if order.action == "exit" else 1)
 
         for order in orders:
             # Validations
@@ -73,7 +73,7 @@ class Backtest:
                 order.value is None
             ):
                 raise ValueError(
-                    "Provide exactly one of 'quantity' or 'value' in TradeAction"
+                    "Provide exactly one of 'quantity' or 'value' in Order"
                 )
             if order.action not in ["enter", "exit"]:
                 raise ValueError("Invalid action. Must be 'enter' or 'exit'.")
@@ -84,6 +84,7 @@ class Backtest:
                 # Close an existing position
                 for pos in self._get_open_positions():
                     if pos.id == order.position_id:
+                        pos.exit_price = next_interval_data["Open"]
                         pos.exit_time = next_interval_data.name
 
                         # Update available cash
@@ -106,6 +107,8 @@ class Backtest:
                 new_position = Position(
                     id=f"{len(self.positions) + 1}",
                     entry_time=next_interval_data.name,
+                    entry_price=next_interval_data["Open"],
+                    exit_price=None,
                     exit_time=None,
                     quantity=order.quantity,
                 )
@@ -128,12 +131,12 @@ class Backtest:
         # Add position exposure for each position
         for position in self.positions:
             # Get the initial value of the position (value at entry time)
-            entry_value = pnl_df.loc[position.entry_time, "Open"] * position.quantity
+            entry_value = position.entry_price * position.quantity
 
             # Get the exit time of the position (last interval if not closed)
             last_quantity_int_idx = (
                 pnl_df.index.get_loc(position.exit_time) - 1
-                if position.exit_time is not None
+                if position.is_closed
                 else -1
             )
             last_quantity_idx = pnl_df.index[last_quantity_int_idx]
@@ -141,8 +144,8 @@ class Backtest:
             # Subtract position entry value from the cash value
             cash_balance.loc[position.entry_time :] -= entry_value
             # Add back the exit value to the cash value
-            if position.exit_time is not None:
-                exit_value = pnl_df.loc[position.exit_time, "Open"] * position.quantity
+            if position.is_closed:
+                exit_value = position.exit_price * position.quantity
                 cash_balance.loc[position.exit_time :] += exit_value
 
             # Calculate position value for each interval
@@ -228,13 +231,10 @@ class Backtest:
         losses = []
 
         for pos in self.positions:
-            entry_price = self.pnl_df.loc[pos.entry_time, "Open"]
             exit_price = (
-                self.pnl_df.loc[pos.exit_time, "Open"]
-                if pos.exit_time is not None
-                else self.pnl_df["Close"].iloc[-1]
+                pos.exit_price if pos.is_closed else self.pnl_df["Close"].iloc[-1]
             )
-            pnl = (exit_price - entry_price) * pos.quantity
+            pnl = (exit_price - pos.entry_price) * pos.quantity
 
             if pnl > 0:
                 wins.append(pnl)
@@ -283,7 +283,7 @@ class Backtest:
 
         :return: List of open positions.
         """
-        return [pos for pos in self.positions if pos.exit_time is None]
+        return [pos for pos in self.positions if pos.is_open]
 
     def _calculate_buying_power(self, next_interval_data) -> float:
         """

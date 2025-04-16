@@ -13,3 +13,10 @@ class Order:
     position_id: Optional[str] = (
         None  # ID of the position to be closed. Needed for closing only
     )
+
+    @property
+    def is_limit(self) -> bool:
+        """
+        Returns True if the order is a limit order.
+        """
+        return self.price is not None
