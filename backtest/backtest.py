@@ -26,40 +26,74 @@ class Backtest:
         self.starting_equity = equity
         self.cash_balance = equity
         self.positions: List[Position] = []
+        self.open_orders: List[Order] = []
 
     def run(self):
         # Run the backtest form the first interval to the second to last last interval. Data from the last interval cannot be used to open new positions.
         # Positions are opened and closed with the open price of the next interval.
-        # All remaining positions on the last interval are closed with the open price.
         for i in range(len(self.data) - 1):
             # Get the data until that interval, included (historical data)
             historical_data = self.data.iloc[: i + 1]
             # Get the next interval data (next_data)
             next_data = self.data.iloc[i + 1]
 
-            # Throw an error if the buying power becomes negative. Possibly handle position liquidation later;
+            # Throw an error if the buying power becomes negative.
+            # This would happen if short positions cannot be covered.
+            # Possibly handle gracefully by liquidating positions later;
             buying_power = self._calculate_buying_power(next_data)
             if buying_power < 0:
                 raise ValueError(
                     f"Buying power is negative: {buying_power}. The strategy was liquidated at open on {next_data.name}."
                 )
 
-            positions_books = PositionsBook(self.positions, historical_data.iloc[-1])
+            positions_book = PositionsBook(self.positions, historical_data.iloc[-1])
 
             # Call the strategy's on_candle method
-            orders = self.strategy.on_candle(historical_data, positions_books)
+            orders = self.strategy.on_candle(historical_data, positions_book)
 
-            # Update positions based on orders
-            self._update_positions(orders, next_data)
+            for order in orders:
+                # Validations
+                if order.action == "enter" and (order.quantity is None) == (
+                    order.value is None
+                ):
+                    raise ValueError(
+                        "Provide exactly one of 'quantity' or 'value' in TradeAction"
+                    )
+                if order.action not in ["enter", "exit"]:
+                    raise ValueError("Invalid action. Must be 'enter' or 'exit'.")
+                if order.action == "exit" and order.position_id is None:
+                    raise ValueError("Position ID must be provided for exit action.")
+
+            limit_orders = [order for order in orders if order.is_limit]
+            market_orders = [order for order in orders if not order.is_limit]
+
+            # update open orders
+            self._update_open_orders(limit_orders)
+
+            # Update positions based on market orders
+            self._fulfill_market_orders(market_orders, next_data)
+
+            # Update positions based on limit orders
+            self._fulfill_limit_orders(self.open_orders, next_data)
 
         self._calculate_pnl()
 
-    def _update_positions(self, orders: List[Order], next_interval_data: pd.Series):
+    def _update_open_orders(self, orders: List[Order]):
         """
-        Update the open positions based on the orders created by the strategy.
+        Update the open orders with the new limit orders.
 
-        :param orders: List of orders to be executed.
-        :return: Updated list of open positions.
+        :param orders: List of limit orders to be added.
+        """
+        self.open_orders += orders
+
+    def _fulfill_market_orders(
+        self, orders: List[Order], next_interval_data: pd.Series
+    ):
+        """
+        Update the open positions by fulfilling the market orders.
+
+        :param orders: List of market orders to be executed.
+        :param next_interval_data: Data for the next interval.
         """
 
         # process exit actions first to
@@ -68,54 +102,83 @@ class Backtest:
         orders = sorted(orders, key=lambda order: 0 if order.action == "exit" else 1)
 
         for order in orders:
-            # Validations
-            if order.action == "enter" and (order.quantity is None) == (
-                order.value is None
+            self._fulfill_order(
+                order,
+                execution_price=next_interval_data["Open"],
+                execution_time=next_interval_data.name,
+                check_buying_power=True,
+            )
+
+    def _fulfill_limit_orders(self, orders: List[Order], next_interval_data: pd.Series):
+        """
+        Update the open positions by fulfilling the limit orders.
+
+        :param orders: List of limit orders to be executed.
+        :param next_interval_data: Data for the next interval.
+        """
+        for order in orders:
+            if self._is_limit_order_condition_met(order, next_interval_data):
+                self._fulfill_order(
+                    order,
+                    execution_price=order.price,
+                    execution_time=next_interval_data.name,
+                    check_buying_power=False,
+                )
+                # Remove the fulfilled order from the open orders
+                self.open_orders.remove(order)
+
+    def _fulfill_order(
+        self,
+        order: Order,
+        execution_price: float,
+        execution_time: pd.Timestamp,
+        check_buying_power: bool,
+    ):
+        """
+        Fulfill the order at the given execution price.
+
+        :param order: Order to be fulfilled.
+        :param execution_price: Price at which the order is executed.
+        :param check_buying_power: Whether to check buying power before executing the order.
+        """
+        if order.action == "exit":
+            # Close an existing position
+            for pos in self._get_open_positions():
+                if pos.id == order.position_id:
+                    pos.exit_price = execution_price
+                    pos.exit_time = execution_time
+                    # Update available cash
+                    self.cash_balance += pos.quantity * execution_price
+
+                    break
+        elif order.action == "enter":
+            # Convert value to quantity if needed
+            if order.value is not None:
+                # Calculate quantity from value
+                order.quantity = order.value / execution_price
+
+            # Check if there is enough cash to enter the position
+            entry_cost = order.quantity * execution_price
+            if (
+                check_buying_power
+                and self._calculate_buying_power(execution_price) < entry_cost
             ):
                 raise ValueError(
-                    "Provide exactly one of 'quantity' or 'value' in Order"
+                    f"Insufficient buying power to execute order {order} on {execution_time}. Buying power: {self._calculate_buying_power(execution_price)}, entry cost: {entry_cost}."
                 )
-            if order.action not in ["enter", "exit"]:
-                raise ValueError("Invalid action. Must be 'enter' or 'exit'.")
-            if order.action == "exit" and order.position_id is None:
-                raise ValueError("Position ID must be provided for exit action.")
 
-            if order.action == "exit":
-                # Close an existing position
-                for pos in self._get_open_positions():
-                    if pos.id == order.position_id:
-                        pos.exit_price = next_interval_data["Open"]
-                        pos.exit_time = next_interval_data.name
+            new_position = Position(
+                id=f"{len(self.positions) + 1}",
+                entry_time=execution_time,
+                entry_price=execution_price,
+                exit_price=None,
+                exit_time=None,
+                quantity=order.quantity,
+            )
+            self.positions.append(new_position)
 
-                        # Update available cash
-                        self.cash_balance += pos.quantity * next_interval_data["Open"]
-
-                        break
-            elif order.action == "enter":
-                # Convert value to quantity if needed
-                if order.value is not None:
-                    # Calculate quantity from value
-                    order.quantity = order.value / next_interval_data["Open"]
-
-                # Check if there is enough cash to enter the position
-                entry_cost = order.quantity * next_interval_data["Open"]
-                if self._calculate_buying_power(next_interval_data) < entry_cost:
-                    raise ValueError(
-                        f"Insufficient buying power to execute order {order} on {next_interval_data.name}. Buying power: {self._calculate_buying_power(next_interval_data)}, entry cost: {entry_cost}."
-                    )
-
-                new_position = Position(
-                    id=f"{len(self.positions) + 1}",
-                    entry_time=next_interval_data.name,
-                    entry_price=next_interval_data["Open"],
-                    exit_price=None,
-                    exit_time=None,
-                    quantity=order.quantity,
-                )
-                self.positions.append(new_position)
-
-                # Update available cash
-                self.cash_balance -= entry_cost
+            # Update available cash
+            self.cash_balance -= entry_cost
 
     def _calculate_pnl(self):
         """
@@ -285,7 +348,7 @@ class Backtest:
         """
         return [pos for pos in self.positions if pos.is_open]
 
-    def _calculate_buying_power(self, next_interval_data) -> float:
+    def _calculate_buying_power(self, price) -> float:
         """
         Calculate the buying power of the portfolio.
 
@@ -296,9 +359,52 @@ class Backtest:
         ]
 
         short_exposure = np.sum(
+            [price * abs(pos.quantity) for pos in open_short_positions]
+        )
+
+        open_enter_orders = [
+            order for order in self.open_orders if order.action == "enter"
+        ]
+        open_enter_buy_orders = [
+            order for order in open_enter_orders if self._is_buy_order(order)
+        ]
+        locked_in_open_buy_orders = np.sum(
             [
-                next_interval_data["Open"] * abs(pos.quantity)
-                for pos in open_short_positions
+                (order.quantity * order.price if order.quantity else order.value)
+                for order in open_enter_buy_orders
             ]
         )
-        return self.cash_balance - short_exposure
+        return self.cash_balance - short_exposure - locked_in_open_buy_orders
+
+    # Ideally this method should be a property of the Order class,
+    # but the Order would need context about open positions
+    def _is_buy_order(self, order: Order) -> bool:
+        """
+        Check if the order is a buy order.
+
+        :param order: Order to check.
+        :return: True if the order is a buy order, False otherwise.
+        """
+        if order.action == "exit":
+            position = next(
+                pos for pos in self.positions if pos.id == order.position_id
+            )
+            return position.quantity < 0
+        return order.quantity > 0 if order.quantity else order.value > 0
+
+    def _is_limit_order_condition_met(
+        self, order: Order, next_interval_data: pd.Series
+    ) -> bool:
+        """
+        Check if the limit order condition is met.
+
+        :param order: Order to check.
+        :param next_interval_data: Data for the next interval.
+        :return: True if the limit order condition is met, False otherwise.
+        """
+        print(f"is_buy_order: {self._is_buy_order(order)}")
+
+        if self._is_buy_order(order):
+            return next_interval_data["Low"] <= order.price
+        else:
+            return next_interval_data["High"] >= order.price
